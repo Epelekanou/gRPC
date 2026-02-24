@@ -2,7 +2,8 @@
 
 From repo root:
 ```
-docker compose -f docker-compose.yml -f grader/docker-compose.grader.yml up --build --abort-on-container-exit --exit-code-from grader
+docker compose -f docker-compose.yml -f grader/docker-compose.grader.yml up --build --abort-on-container-exit --exit-code-from grader --no-attach redis --no-attach collector --no-attach api --no-attach sensors
+
 ```
 
 This will:
