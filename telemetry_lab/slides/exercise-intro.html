@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Dist.Labs-HW-1</title>
+    <meta charset="utf-8">
+    <style>
+      @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
+      @import url(https://fonts.googleapis.com/css?family=Droid+Serif:400,700,400italic);
+      @import url(https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic);
+
+      body { font-family: 'Droid Serif'; }
+      h1, h2, h3 {
+        font-family: 'Yanone Kaffeesatz';
+        font-weight: normal;
+      }
+      .remark-code, .remark-inline-code { font-family: 'Ubuntu Mono'; }
+    </style>
+  </head>
+  <body>
+    <textarea id="source">
+
+<!-- class: center, middle -->
+# 🏭 Distributed Telemetry System with gRPC
+
+---
+
+# Smart Industrial Telemetry System
+
+### gRPC + Redis + Docker Compose
+
+* Client-streaming
+* Server-streaming
+* Unary RPC
+* Stateless services
+* Shared aggregation backend
+
+---
+
+# Slide 2 — Real-World Context
+
+## Smart Industrial Facility
+
+Imagine a factory with:
+
+* 🌡 Temperature sensors
+* 💧 Humidity sensors
+* ⚙ Vibration monitors
+* 🔊 Noise detectors
+
+Each emits continuous measurements.
+
+We need:
+
+* Reliable ingestion
+* Real-time aggregation
+* Live dashboard
+* Query interface
+* Fault tolerance
+
+---
+
+# Slide 3 — System Overview
+
+```
+Sensors
+   │ (client-streaming gRPC)
+   ▼
+Collectors (stateless)
+   │
+   ▼
+Redis (shared state)
+   │
+   ├── server-streaming → FastAPI → WebSocket
+   └── unary RPC → FastAPI → HTTP
+```
+
+---
+
+# Slide 4 — Why gRPC?
+
+Advantages:
+
+* Strongly typed contracts (Proto)
+* Efficient binary serialization
+* Streaming support
+* Language-agnostic
+* Production-grade
+
+---
+
+# Slide 5 — RPC Patterns Used
+
+| Pattern          | Where               | Why                  |
+| ---------------- | ------------------- | -------------------- |
+| Client-streaming | Sensors → Collector | Continuous telemetry |
+| Server-streaming | Collector → FastAPI | Live dashboard       |
+| Unary            | FastAPI → Collector | Sensor drill-down    |
+
+---
+
+# Slide 6 — Client-Streaming Explained
+
+```
+rpc PushMeasurements(stream Measurement) returns Ack
+```
+
+Sensors:
+
+* Open persistent connection
+* Send measurements continuously
+* Reconnect on failure
+
+Collector:
+
+* Reads stream asynchronously
+* Updates Redis
+* Returns acknowledgement on stream completion
+
+---
+
+# Slide 7 — Server-Streaming Explained
+
+```
+rpc StreamAggregates(...) returns (stream Aggregate)
+```
+
+Collector:
+
+* Polls Redis periodically
+* Emits updated aggregates
+* Continues until client disconnects
+
+FastAPI:
+
+* Subscribes
+* Broadcasts to WebSocket clients
+
+---
+
+# Slide 8 — Unary RPC Explained
+
+```
+rpc GetSensorStats(...) returns GetSensorStatsResponse
+```
+
+FastAPI:
+
+* Requests per-sensor stats
+* Returns JSON to browser
+* Includes recent 20 values
+
+Simple request-response pattern.
+
+---
+
+# Slide 9 — Redis Data Model
+
+### Global aggregates
+
+```
+agg:{type}:{location}
+  count
+  sum
+  min
+  max
+```
+
+### Per-sensor stats
+
+```
+sensor:{id}:stats
+```
+
+### Last 20 values
+
+```
+sensor:{id}:recent
+```
+
+Bounded list via:
+
+```
+LPUSH
+LTRIM 0 19
+```
+
+---
+
+# Slide 10 — Why Collectors Are Stateless
+
+Collectors:
+
+* Do NOT store state in memory.
+* Write to Redis.
+* Can be replicated.
+* Can crash without losing data.
+
+Stateless services scale horizontally.
+
+---
+
+# Slide 11 — Docker Compose Role
+
+Compose orchestrates:
+
+* Redis
+* Collector(s)
+* FastAPI
+* Sensors
+
+Benefits:
+
+* Reproducibility
+* Deterministic testing
+* Isolation
+* CI-friendly
+
+---
+
+# Slide 12 — Data Flow Walkthrough
+
+1. Sensor emits measurement.
+2. gRPC client-stream to collector.
+3. Collector updates Redis.
+4. Aggregate changes detected.
+5. gRPC server-stream to FastAPI.
+6. FastAPI pushes to WebSocket.
+7. Browser updates live.
+
+---
+
+# Slide 13 — Concurrency Model
+
+* Async gRPC (`grpc.aio`)
+* Async Redis
+* Background tasks in FastAPI
+* Multiple concurrent sensor streams
+
+No blocking calls allowed.
+
+---
+
+# Slide 14 — Common Failure Modes
+
+Now the fun part: debugging.
+
+---
+
+# Slide 15 — Failure Scenario 1
+
+## Collector Crashes
+
+Symptoms:
+
+* Sensor stream errors.
+* FastAPI stream stops.
+* Redis still running.
+
+Expected behavior:
+
+* Sensors reconnect.
+* FastAPI retry loop reconnects.
+* No data lost.
+
+Debug steps:
+
+* Check logs.
+* Check Redis keys.
+* Restart collector.
+
+---
+
+# Slide 16 — Failure Scenario 2
+
+## Redis Down
+
+Symptoms:
+
+* Collector ingestion fails.
+* Aggregates not updating.
+* FastAPI stream may stall.
+
+Debug:
+
+* Inspect Redis container logs.
+* Confirm Redis connection host/port.
+* Check exception handling.
+
+Discussion:
+
+Why shared state is a single point of failure?
+
+---
+
+# Slide 17 — Failure Scenario 3
+
+## WebSocket Disconnect
+
+Symptoms:
+
+* Dashboard stops updating.
+* FastAPI still receiving stream.
+
+Expected:
+
+* WebSocket client reconnects.
+* No collector impact.
+
+---
+
+# Slide 18 — Failure Scenario 4
+
+## Proto Mismatch
+
+Symptoms:
+
+* gRPC UNIMPLEMENTED error.
+* Deserialization errors.
+* Field mismatch.
+
+Cause:
+
+* Proto definitions differ between services.
+* Stubs not regenerated.
+
+Lesson:
+
+Always regenerate stubs after proto change.
+
+---
+
+# Slide 19 — Failure Scenario 5
+
+## Blocking Code in Async Loop
+
+Symptoms:
+
+* System freezes.
+* Streams stall.
+* High CPU.
+
+Cause:
+
+* Using blocking Redis client.
+* Using `time.sleep()` instead of `await asyncio.sleep()`.
+
+Lesson:
+
+Understand async programming.
+
+---
+
+# Slide 20 — Failure Scenario 6
+
+## Memory Leak
+
+Symptoms:
+
+* Collector RAM usage grows.
+* Too many aggregate snapshots.
+
+Cause:
+
+* Storing unbounded data.
+* Not trimming Redis list.
+
+Lesson:
+
+Bound state in streaming systems.
+
+---
+
+# Slide 21 — Failure Scenario 7
+
+## Thundering Herd
+
+Simulate:
+
+* Kill collector.
+* Restart.
+
+Sensors reconnect simultaneously.
+
+Solution:
+
+Exponential backoff + jitter.
+
+---
+
+# Slide 22 — Debugging Tools
+
+* `docker compose logs`
+* `redis-cli keys *`
+* `redis-cli hgetall key`
+* `curl http://localhost:8000/sensor/T-01`
+* gRPC logs
+
+---
+
+# Slide 23 — Architectural Strengths
+
+* Clear service boundaries
+* Stateless ingestion
+* Horizontal scaling ready
+* Multiple RPC styles
+* Production-like design
+
+---
+
+# Slide 24 — What Would Change in Production?
+
+* Real load balancer
+* Authentication
+* TLS
+* gRPC health checks
+* Metrics (Prometheus)
+* Persistent storage beyond Redis
+
+---
+
+# Slide 25 — Summary
+
+You built:
+
+* A distributed telemetry pipeline
+* Using three RPC patterns
+* With shared state and Docker orchestration
+* With fault tolerance and live streaming
+
+This is structurally similar to:
+
+* Industrial IoT backends
+* Monitoring systems
+* Observability platforms
+
+---
+
+# Slide 26 — Discussion Questions
+
+1. Why is stateless design powerful?
+2. What happens if Redis becomes a bottleneck?
+3. Would Kafka be better than Redis?
+4. How would you add authentication?
+5. How would you support historical queries?
+
+---
+
+# Slide 27 — Optional Advanced Extensions
+
+* Add gRPC health checks
+* Add Prometheus metrics
+* Replace polling with Redis pub/sub
+* Implement dedup using `(sensor_id, seq)`
+* Add load balancer (Envoy)
+
+---
+
+# Slide 28 — End
+
+Questions?
+
+---
+
+    </textarea>
+    <script src="https://remarkjs.com/downloads/remark-latest.min.js">
+    </script>
+    <script>
+      var slideshow = remark.create();
+    </script>
+  </body>
+</html>

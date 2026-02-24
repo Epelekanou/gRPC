@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  collector1:
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    command: ["python", "-m", "collector.collector_server", "--port", "50051"]
+    depends_on:
+      - redis
+    ports:
+      - "50051:50051"
+
+  collector2:
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    command: ["python", "-m", "collector.collector_server", "--port", "50052"]
+    depends_on:
+      - redis
+    ports:
+      - "50052:50052"
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    environment:
+      COLLECTOR_ADDR: collector1:50051   # keep it single-upstream for the lab
+    depends_on:
+      - collector1
+      - redis
+    ports:
+      - "8000:8000"
+
+  sensors:
+    build:
+      context: .
+      dockerfile: sensor/Dockerfile
+    environment:
+      COLLECTOR_ADDRS: "collector1:50051,collector2:50052"
+    depends_on:
+      - collector1
+      - collector2

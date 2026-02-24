@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Dist.Labs-HW-1</title>
+    <meta charset="utf-8">
+    <style>
+      @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
+      @import url(https://fonts.googleapis.com/css?family=Droid+Serif:400,700,400italic);
+      @import url(https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic);
+
+      body { font-family: 'Droid Serif'; }
+      h1, h2, h3 {
+        font-family: 'Yanone Kaffeesatz';
+        font-weight: normal;
+      }
+      .remark-code, .remark-inline-code { font-family: 'Ubuntu Mono'; }
+    </style>
+  </head>
+  <body>
+    <textarea id="source">
+
+<!-- class: center, middle -->
+# 🎓 Async gRPC Crash Course (10 Minutes)
+
+---
+
+# 🧵 Slide 1 — Why Async Here?
+
+## Our Lab Uses:
+
+* Many sensors streaming continuously
+* One collector handling multiple streams
+* FastAPI subscribing to a streaming RPC
+* WebSockets broadcasting updates
+
+If we used blocking code:
+
+❌ One slow sensor blocks everything
+❌ Web server freezes
+❌ Streaming stops
+
+Async allows:
+
+✅ Concurrency without threads
+✅ Efficient streaming
+✅ Non-blocking I/O
+
+---
+
+# ⚡ Slide 2 — What “async” Actually Means
+
+Async ≠ parallel execution.
+
+Async = cooperative multitasking.
+
+Tasks voluntarily yield control:
+
+```python
+await something()
+```
+
+While waiting:
+
+* Other tasks run.
+* No thread switching.
+* Single event loop.
+
+---
+
+### Diagram
+
+```
+Event Loop
+ ├── Sensor 1 task
+ ├── Sensor 2 task
+ ├── gRPC stream task
+ └── WebSocket broadcast task
+```
+
+All share one loop.
+
+---
+
+# 🔁 Slide 3 — `async def` and `await`
+
+Basic rule:
+
+* `async def` → defines a coroutine
+* `await` → pauses and yields control
+
+Example from sensors:
+
+```python
+async def stream():
+    while True:
+        value = generate_value()
+        yield value
+        await asyncio.sleep(1)
+```
+
+Key idea:
+
+* `await` allows other coroutines to run.
+
+If you use:
+
+```python
+time.sleep(1)
+```
+
+You freeze the entire system.
+
+---
+
+# 📡 Slide 4 — Async Generators (Very Important)
+
+In our lab:
+
+```python
+async def request_generator():
+    async for reading in sensor.stream():
+        yield telemetry_pb2.Measurement(...)
+```
+
+This is an **async generator**.
+
+Difference:
+
+| Normal generator | Async generator        |
+| ---------------- | ---------------------- |
+| `for x in gen()` | `async for x in gen()` |
+| blocking         | cooperative            |
+
+This is how client-streaming works.
+
+---
+
+# 🚀 Slide 5 — Async gRPC (grpc.aio)
+
+We MUST use:
+
+```python
+grpc.aio
+```
+
+Not:
+
+```python
+grpc.insecure_channel()
+```
+
+Correct pattern:
+
+```python
+async with grpc.aio.insecure_channel(addr) as channel:
+    stub = telemetry_pb2_grpc.IngestServiceStub(channel)
+    await stub.PushMeasurements(generator())
+```
+
+What happens:
+
+* gRPC uses async sockets
+* Does not block event loop
+* Supports streaming properly
+
+---
+
+# 🔄 Slide 6 — Streaming RPC Patterns (Async View)
+
+## Client Streaming (Sensors → Collector)
+
+```
+Sensor task
+   │
+   ├── async generator
+   │
+   └── await stub.PushMeasurements(...)
+```
+
+The generator yields.
+gRPC consumes asynchronously.
+
+---
+
+## Server Streaming (Collector → FastAPI)
+
+```python
+async for agg in stub.StreamAggregates(request):
+    await broadcast(...)
+```
+
+Key concept:
+
+* `async for` reads stream without blocking.
+* Loop exits when connection closes.
+
+---
+
+# 🌐 Slide 7 — FastAPI + Background Tasks
+
+In FastAPI:
+
+```python
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(subscribe_to_collector())
+```
+
+Why?
+
+* `subscribe_to_collector()` runs forever.
+* Must not block startup.
+* Runs in background event loop.
+
+Inside:
+
+```python
+async for agg in stub.StreamAggregates(...):
+    await broadcast(...)
+```
+
+Everything async.
+Nothing blocks.
+
+---
+
+# 🧨 Slide 8 — Common Async Mistakes (In This Lab)
+
+### ❌ Using time.sleep()
+
+Blocks entire system.
+
+---
+
+### ❌ Forgetting `await`
+
+Wrong:
+
+```python
+stub.PushMeasurements(gen())
+```
+
+Correct:
+
+```python
+await stub.PushMeasurements(gen())
+```
+
+---
+
+### ❌ Using blocking Redis client
+
+If you use:
+
+```python
+redis.Redis()
+```
+
+inside async loop,
+it blocks.
+
+(For this lab we tolerate simple usage,
+but understand it’s blocking.)
+
+---
+
+### ❌ Mixing sync and async gRPC
+
+Must use:
+
+```python
+grpc.aio
+```
+
+Not:
+
+```python
+grpc.insecure_channel
+```
+
+---
+
+# 🧠 Slide 9 — Mental Model for This Lab
+
+You are building:
+
+```
+Async Event Loop
+    │
+    ├── Sensor Tasks
+    ├── gRPC Streams
+    ├── Redis Updates
+    ├── FastAPI Background Task
+    └── WebSocket Broadcasts
+```
+
+All running concurrently
+on one event loop.
+
+No threads required.
+
+---
+
+# 🏁 Slide 10 — The Golden Rules
+
+1. If it waits → use `await`.
+2. If it loops forever → use `async for`.
+3. Never use blocking calls in async code.
+4. Use `grpc.aio`.
+5. Think in terms of event loop tasks.
+
+---
+
+# 🧩 Questions?
+
+<!-- Ask students:
+
+> What happens if one sensor becomes slow?
+
+Correct answer:
+
+Nothing breaks.
+Other tasks continue.
+That’s the power of async. -->
+
+---
+
+    </textarea>
+    <script src="https://remarkjs.com/downloads/remark-latest.min.js">
+    </script>
+    <script>
+      var slideshow = remark.create();
+    </script>
+  </body>
+</html>

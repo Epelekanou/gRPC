@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Industrial Smart Floor Dashboard</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body {
+  font-family: Arial;
+  background:#f4f4f4;
+}
+
+#floorplan {
+  width:100%;
+  height:70vh;
+  border:1px solid #aaa;
+  background:white;
+}
+
+.room { stroke:#333; stroke-width:2; cursor:pointer; }
+
+.sensor {
+  fill:black;
+  cursor:pointer;
+}
+
+#miniCharts {
+  display:flex;
+  gap:20px;
+  padding:10px;
+}
+
+.modal {
+  display:none;
+  position:fixed;
+  top:8%;
+  left:10%;
+  width:80%;
+  height:80%;
+  background:white;
+  border:2px solid black;
+  padding:15px;
+  z-index:999;
+  overflow:auto;
+}
+
+.closeBtn {
+  float:right;
+  cursor:pointer;
+  font-weight:bold;
+}
+</style>
+
+</head>
+
+<body>
+
+<h2>Industrial Smart Floor Dashboard</h2>
+
+<div id="floorplan"></div>
+
+<div id="miniCharts"></div>
+
+<div id="modal" class="modal">
+<span class="closeBtn" onclick="closeModal()">Close ✖</span>
+<h3 id="modalTitle"></h3>
+<canvas id="modalChart"></canvas>
+</div>
+
+<script>
+/* ---------- CONFIG ---------- */
+
+const wsUrl="ws://localhost:8000/ws";
+const socket=new WebSocket(wsUrl);
+
+const rooms={
+ boiler_room:{x:50,y:50,w:220,h:180},
+ warehouse:{x:320,y:50,w:350,h:180},
+ lab:{x:50,y:260,w:220,h:180},
+ assembly_line:{x:320,y:260,w:350,h:180},
+};
+
+/* ---------- HISTORY STORAGE ---------- */
+
+const roomHistory={
+ boiler_room:{temperature:[],humidity:[],vibration:[]},
+ warehouse:{temperature:[],humidity:[],vibration:[]},
+ lab:{temperature:[],humidity:[],vibration:[]},
+ assembly_line:{temperature:[],humidity:[],vibration:[]}
+};
+
+const sensorHistory={};
+
+/* ---------- SVG FLOOR ---------- */
+
+const svgNS="http://www.w3.org/2000/svg";
+const svg=document.createElementNS(svgNS,"svg");
+svg.setAttribute("width","100%");
+svg.setAttribute("height","100%");
+document.getElementById("floorplan").appendChild(svg);
+
+
+const miniCharts={};
+
+
+/* Draw rooms */
+
+Object.entries(rooms).forEach(([room,d])=>{
+ const rect=document.createElementNS(svgNS,"rect");
+ rect.setAttribute("x",d.x);
+ rect.setAttribute("y",d.y);
+ rect.setAttribute("width",d.w);
+ rect.setAttribute("height",d.h);
+ rect.classList.add("room");
+ rect.dataset.room=room;
+ rect.setAttribute("fill","#eee");
+ rect.onclick=()=>openRoomModal(room);
+ svg.appendChild(rect);
+
+ const txt=document.createElementNS(svgNS,"text");
+ txt.setAttribute("x",d.x+10);
+ txt.setAttribute("y",d.y+20);
+ txt.textContent=room.replace("_"," ");
+ svg.appendChild(txt);
+
+ createMiniChart(room);
+});
+
+/* ---------- MINI ROOM CHARTS ---------- */
+
+
+function createMiniChart(room){
+ const canvas=document.createElement("canvas");
+ canvas.width=160;
+ canvas.height=60;
+ document.getElementById("miniCharts").appendChild(canvas);
+
+ miniCharts[room]=new Chart(canvas,{
+   type:"line",
+   data:{labels:[],datasets:[{data:[],borderColor:"red",fill:false}]},
+   options:{
+     animation:false,
+     scales:{x:{display:false},y:{display:false}},
+     plugins:{legend:{display:false}}
+   }
+ });
+}
+
+/* ---------- HISTORY HELPERS ---------- */
+
+function pushHistory(arr,val){
+ arr.push(val);
+ if(arr.length>50) arr.shift();
+}
+
+/* ---------- ROOM COLOR ---------- */
+
+function tempColor(t){
+ if(!t) return "#eee";
+ if(t<20) return "#4fc3f7";
+ if(t<30) return "#81c784";
+ if(t<50) return "#ffb74d";
+ return "#e57373";
+}
+
+function updateRoomColor(room,temp){
+ svg.querySelectorAll(".room").forEach(r=>{
+  if(r.dataset.room===room){
+   r.setAttribute("fill",tempColor(temp));
+  }
+ });
+}
+
+/* ---------- SENSOR ICONS ---------- */
+
+function drawSensor(room){
+ const base=rooms[room];
+
+ const c=document.createElementNS(svgNS,"circle");
+ c.setAttribute("cx",base.x+20+Math.random()*base.w*0.8);
+ c.setAttribute("cy",base.y+40+Math.random()*base.h*0.6);
+ c.setAttribute("r",4);
+ c.classList.add("sensor");
+
+ c.onclick=()=>openSensorModal(room);
+
+ svg.appendChild(c);
+}
+
+/* create few sensor dots initially */
+Object.keys(rooms).forEach(r=>{
+ for(let i=0;i<8;i++) drawSensor(r);
+});
+
+/* ---------- WEBSOCKET ---------- */
+
+socket.onmessage=e=>{
+ const line=e.data.trim();
+
+ // format: temperature@lab count=123 avg=22 min=20 max=25
+ const parts=line.split(" ");
+ const [mr,...fields]=parts;
+ const [measurement,room]=mr.split("@");
+
+ const data={};
+ fields.forEach(f=>{
+  const [k,v]=f.split("=");
+  data[k]=parseFloat(v);
+ });
+
+ const avg=data.avg;
+
+ pushHistory(roomHistory[room][measurement],avg);
+
+ if(measurement==="temperature"){
+  updateRoomColor(room,avg);
+
+  const chart=miniCharts[room];
+  chart.data.labels.push("");
+  chart.data.datasets[0].data.push(avg);
+  if(chart.data.labels.length>50){
+   chart.data.labels.shift();
+   chart.data.datasets[0].data.shift();
+  }
+  chart.update();
+ }
+};
+
+/* ---------- MODALS ---------- */
+
+let modalChart=null;
+
+function openRoomModal(room){
+ document.getElementById("modal").style.display="block";
+ document.getElementById("modalTitle").innerText=
+   "Room: "+room;
+
+ const temps=roomHistory[room].temperature;
+
+ if(modalChart) modalChart.destroy();
+
+ modalChart=new Chart(
+   document.getElementById("modalChart"),
+   {
+     type:"line",
+     data:{
+       labels:temps.map((_,i)=>i),
+       datasets:[{
+         label:"Temperature",
+         data:temps,
+         borderColor:"red",
+         fill:false
+       }]
+     },
+     options:{animation:false}
+   }
+ );
+}
+
+function openSensorModal(room){
+ document.getElementById("modal").style.display="block";
+ document.getElementById("modalTitle").innerText=
+   "Sensors in "+room;
+
+ const temps=roomHistory[room].temperature;
+
+ if(modalChart) modalChart.destroy();
+
+ modalChart=new Chart(
+   document.getElementById("modalChart"),
+   {
+     type:"line",
+     data:{
+       labels:temps.map((_,i)=>i),
+       datasets:[{
+         label:"Sensor Trend",
+         data:temps,
+         borderColor:"blue",
+         fill:false
+       }]
+     },
+     options:{animation:false}
+   }
+ );
+}
+
+function closeModal(){
+ document.getElementById("modal").style.display="none";
+}
+</script>
+
+</body>
+</html>

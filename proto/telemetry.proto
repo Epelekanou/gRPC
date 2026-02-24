@@ -1,0 +1,68 @@
+syntax = "proto3";
+package telemetry.v1;
+
+// ------------------------------------
+// Core data model
+// ------------------------------------
+
+message SensorMeta {
+    //TODO: define message fields
+}
+
+message Measurement {
+    //TODO: define message fields
+}
+
+// ------------------------------------
+// Aggregations (simple: min/max/count/sum)
+// ------------------------------------
+message AggregateKey {
+    //TODO: define message fields
+}
+
+message Aggregate {
+    //TODO: define message fields
+}
+
+// ------------------------------------
+// Services
+// ------------------------------------
+// Sensors push measurements continuously to collectors.
+service IngestService {
+    rpc PushMeasurements(stream Measurement) returns (IngestAck);
+}
+message IngestAck {
+    uint64 received = 1; //numnrt of measurements processed (best effort)
+}
+
+//FastAPI (or any consumer) can stream aggregate updates from collectors.
+service AggregateService {
+    rpc StreamAggregates(StreamAggregatesRequest) returns (stream Aggregate);
+}
+message StreamAggregatesRequest {
+    // Empty means stream ALL keys
+    repeated AggregateKey keys = 1;
+
+    // If true, collector should emit current snapshot immediately (if available)
+    bool send_initial_snapshot = 2;
+
+    // If >0, collector should rate-limit updates to at most 1 per interval per key.
+    // Usefull later to avoid spamming UI
+    uint32 min_update_interval_ms = 3;
+}
+
+// FastAPI (or any client) can query on-demand stats, e.g. per sensor_id.
+service QueryService {
+    rpc GetSensorStats(GetSensorStatsRequest) returns (GetSensorStatsResponse);
+}
+message GetSensorStatsRequest {
+    //TODO: define message fields
+}
+
+message RecentValue {
+  //TODO: define message fields
+}
+
+message GetSensorStatsResponse {
+    //TODO: define message fields
+}
