@@ -120,51 +120,32 @@ async def broadcast(message: str):
 # gRPC streaming subscriber
 # -----------------------------
 async def subscribe_to_collector():
-    """
-    TEMPORARY PLACEHOLDER.
+    print("[FastAPI] Connecting to collector...")
 
-    Students must replace this with:
+    async with grpc.aio.insecure_channel(COLLECTOR_ADDR) as channel:
+        stub = telemetry_pb2_grpc.AggregateServiceStub(channel)
 
-        grpc.aio channel
-        AggregateServiceStub
-        StreamAggregates RPC call
+        stream = stub.StreamAggregates(
+            telemetry_pb2.StreamAggregatesRequest(
+                send_initial_snapshot=True,
+                min_update_interval_ms=0,
+            )
+        )
 
-        Steps:
-        1) create gRPC async channel:
-            grpc.aio.insecure_channel(...)
-        2) create stub
-            AggregateServiceStub(channel)
-        3) stream rpc call:
-            stub.StreamAggregates(...)
-        4) For each received aggregate message broadcast to connected websocket clients:
-            await broadcast(...)
-            Keep in mind: each Aggregate message received contains:
-                aggregate key (location-sensor type)
-                count (number of measurements)
-                sum (sum of all measurements of sensor-type in location)
-            the broadcast message should contain:
-                the aggregate - key
-                average value (computed here)
-                count, min, max (from Aggregate msg)
+        async for aggregate in stream:
+            avg = aggregate.sum / aggregate.count if aggregate.count else 0
 
+            message = (
+                f"type={aggregate.key.sensor_type} "
+                f"location={aggregate.key.location} "
+                f"count={aggregate.count} "
+                f"avg={avg:.2f} "
+                f"min={aggregate.min:.2f} "
+                f"max={aggregate.max:.2f}"
+            )
 
-        
-    For now:
-    - Generates fake aggregate messages
-    - Broadcasts them every few seconds
-    """
-
-    print("[FastAPI] Placeholder aggregate stream started")
-
-    while True:
-        fake_message = f"placeholder aggregate update {int(time.time())}"
-
-        print("[FastAPI] broadcasting:", fake_message)
-
-        await broadcast(fake_message)
-
-        await asyncio.sleep(5)
-
+            print("[FastAPI] broadcasting:", message)
+            await broadcast(message)
 
 async def query_sensor_stats(sensor_id: str):
     async with grpc.aio.insecure_channel(COLLECTOR_ADDR) as channel:
